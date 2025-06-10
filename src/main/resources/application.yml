@@ -1,0 +1,70 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: coverage-collector
+
+# 覆盖率收集配置
+coverage:
+  # dump文件存储目录
+  dump-directory: ./dump-files
+  # 覆盖率报告输出目录
+  report-directory: ./coverage-reports
+  
+  # 默认JaCoCo agent连接配置
+  agent-host: localhost
+  agent-port: 6300
+  
+  # 基础项目路径，所有应用都在这个路径下
+  base-project-path: ~/project
+  
+  # 默认源码和class文件路径
+  source-directories:
+    - ./src/main/java
+  class-directories:
+    - ./target/classes
+  
+  # 应用特定的JaCoCo端口配置
+  jacoco-ports:
+    user-service: 6300
+    order-service: 6301
+    payment-service: 6302
+    # 其他应用如果没有配置，默认使用6300
+  
+  # 多应用配置（只需要配置特殊的应用，其他应用会自动发现路径）
+  applications:
+    # 示例：特殊配置的应用
+    special-service:
+      agent-host: localhost
+      agent-port: 6300
+      source-directories:
+        - /custom/path/special-service/src/main/java
+        - /custom/path/special-service-api/src/main/java
+      class-directories:
+        - /custom/path/special-service/target/classes
+        - /custom/path/special-service-api/target/classes
+
+# Nacos服务发现配置
+nacos:
+  discovery:
+    # Nacos服务器地址
+    server-addr: localhost:8848
+    # 命名空间
+    namespace-id: public
+    # 分组名
+    group-name: DEFAULT_GROUP
+    # 用户名
+    username: nacos
+    # 密码
+    password: nacos123456
+    # 服务名构建规则（添加.app后缀）
+    service-name-pattern: "{appName}.app"
+
+# 日志配置
+logging:
+  level:
+    com.mofari.coveragecollector: DEBUG
+    org.jacoco: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n" 
