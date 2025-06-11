@@ -133,10 +133,10 @@ public class ReportGeneratorService {
 
         CoverageConfig.ApplicationConfig appConfig = coverageConfig.getApplicationConfig(appName);
         if (appConfig == null) {
-            throw new IllegalArgumentException("Application configuration not found for appName: " + appName);
+            logger.info("Application configuration not found for appName: {} ", appName);
         }
-        List<String> sourceDirs = getSourceDirectories(appName);
-        List<String> classDirs = getClassDirectories(appName);
+        List<String> sourceDirs = getSourceDirectories(appName,tag);
+        List<String> classDirs = getClassDirectories(appName,tag);
         validateDirectories(sourceDirs, classDirs);
 
         String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
@@ -219,16 +219,16 @@ public class ReportGeneratorService {
         }
     }
 
-    private List<String> getSourceDirectories(String appName) {
-        CoverageConfig.ApplicationConfig appConfig = coverageConfig.getApplicationConfig(appName);
+    private List<String> getSourceDirectories(String appName, String tag) {
+        CoverageConfig.ApplicationConfig appConfig = coverageConfig.discoverApplicationPaths(appName, tag);
         if (appConfig != null && appConfig.getSourceDirectories() != null && !appConfig.getSourceDirectories().isEmpty()) {
             return appConfig.getSourceDirectories();
         }
         return coverageConfig.getSourceDirectories() != null ? coverageConfig.getSourceDirectories() : new ArrayList<>();
     }
 
-    private List<String> getClassDirectories(String appName) {
-        CoverageConfig.ApplicationConfig appConfig = coverageConfig.getApplicationConfig(appName);
+    private List<String> getClassDirectories(String appName, String tag) {
+        CoverageConfig.ApplicationConfig appConfig = coverageConfig.discoverApplicationPaths(appName, tag);
         if (appConfig != null && appConfig.getClassDirectories() != null && !appConfig.getClassDirectories().isEmpty()) {
             return appConfig.getClassDirectories();
         }
@@ -338,8 +338,8 @@ public class ReportGeneratorService {
         SessionInfoStore sessionInfoStore = new SessionInfoStore(); // Needed for XML report generation context
         ExecutionDataStore executionDataStore = loadExecutionData(actualDumpFile, sessionInfoStore);
         
-        List<String> sourceDirs = getSourceDirectories(appName);
-        List<String> classDirs = getClassDirectories(appName);
+        List<String> sourceDirs = getSourceDirectories(appName,tag);
+        List<String> classDirs = getClassDirectories(appName,tag);
         validateDirectories(sourceDirs, classDirs); // Ensure dirs exist before analysis
 
         IBundleCoverage bundleCoverage = analyzeCoverage(executionDataStore, classDirs, appName + " Incremental Base Analysis");

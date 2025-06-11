@@ -1,5 +1,6 @@
 package com.mofari.coveragecollector.config;
 
+import com.mofari.coveragecollector.util.SourceClassFinder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -11,6 +12,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import static com.mofari.coveragecollector.util.SourceClassFinder.findDirectories;
 
 @Component
 @ConfigurationProperties(prefix = "coverage")
@@ -65,64 +68,62 @@ public class CoverageConfig {
     private Map<String, Integer> jacocoPortsMap = new HashMap<>();
     
     /**
-     * 自动发现应用的源码和class路径
-     * @param appName 应用名称
-     * @return 应用配置
+     * 获取应用配置
      */
     public ApplicationConfig getApplicationConfig(String appName) {
-        // 1. 优先从配置文件获取
         ApplicationConfig config = applications.get(appName);
-        if (config != null) {
-            logger.debug("从配置文件获取应用配置: {}", appName);
+        if (config != null){
             return config;
         }
-        
-        // 2. 自动发现路径
-        logger.info("自动发现应用路径: {}", appName);
-        return discoverApplicationPaths(appName);
+        return new ApplicationConfig();
     }
     
     /**
-     * 自动发现应用的源码和class路径
+     * 获取应用配置，支持appName+tag，根目录为~/project/appname-tag/
+     * @param appName 应用名
+     * @param tag 版本tag
+     * @return 应用配置
      */
-    private ApplicationConfig discoverApplicationPaths(String appName) {
+    public ApplicationConfig discoverApplicationPaths(String appName, String tag) {
+        String basePath = expandPath(baseProjectPath);
+        String appRoot = basePath + File.separator + appName + (tag != null && !tag.isEmpty() ? ("-" + tag) : "");
         ApplicationConfig config = new ApplicationConfig();
         config.setName(appName);
         config.setAgentHost(agentHost);
         config.setAgentPort(getJacocoPort(appName));
-        
-        // 解析基础路径
-        String basePath = expandPath(baseProjectPath);
-        String appPath = basePath + File.separator + appName;
-        
-        logger.debug("搜索应用路径: {}", appPath);
-        
-        File appDir = new File(appPath);
-        if (!appDir.exists() || !appDir.isDirectory()) {
-            logger.warn("应用目录不存在: {}", appPath);
-            // 返回默认配置
-            config.setSourceDirectories(sourceDirectories);
-            config.setClassDirectories(classDirectories);
-            return config;
+
+        ApplicationConfig confFromYaml = applications.get(appName);
+        if (confFromYaml != null &&
+            confFromYaml.getSourceDirectories() != null && !confFromYaml.getSourceDirectories().isEmpty() &&
+            confFromYaml.getClassDirectories() != null && !confFromYaml.getClassDirectories().isEmpty()) {
+            // 配置了源码和class路径，拼接根目录
+            List<String> srcDirs = new ArrayList<>();
+            for (String rel : confFromYaml.getSourceDirectories()) {
+                srcDirs.add(appRoot + File.separator + rel);
+            }
+            List<String> clsDirs = new ArrayList<>();
+            for (String rel : confFromYaml.getClassDirectories()) {
+                clsDirs.add(appRoot + File.separator + rel);
+            }
+            config.setSourceDirectories(srcDirs);
+            config.setClassDirectories(clsDirs);
+            logger.info("应用 {} 使用配置文件中的源码和class路径，相对根目录 {}", appName, appRoot);
+        } else {
+            // 自动扫描所有模块
+            logger.info("应用 {} 未配置源码/class路径，自动扫描 {} 下所有模块", appName, appRoot);
+            File appDir = new File(appRoot);
+            List<String> discoveredSourceDirs = findDirectories(appDir, "src/main/java");
+            List<String> discoveredClassDirs = findDirectories(appDir, "target/classes");
+            config.setSourceDirectories(discoveredSourceDirs);
+            config.setClassDirectories(discoveredClassDirs);
         }
-        
-        // 自动发现源码路径
-        List<String> discoveredSourceDirs = findDirectories(appDir, "src/main/java");
-        List<String> discoveredClassDirs = findDirectories(appDir, "target/classes");
-        
-        config.setSourceDirectories(discoveredSourceDirs);
-        config.setClassDirectories(discoveredClassDirs);
-        
-        logger.info("应用 {} 自动发现路径完成，源码目录: {}, class目录: {}", 
-                   appName, discoveredSourceDirs.size(), discoveredClassDirs.size());
-        
         return config;
     }
     
     /**
      * 递归查找指定模式的目录
      */
-    private List<String> findDirectories(File rootDir, String targetPattern) {
+    private List<String> findDirectoriesNot(File rootDir, String targetPattern) {
         List<String> foundPaths = new ArrayList<>();
         String[] patternParts = targetPattern.split("/");
         
