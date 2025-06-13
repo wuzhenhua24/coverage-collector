@@ -5,6 +5,7 @@ public class FullCoverageReport {
     private String clusterName;
     private String tag;
     private String reportPath;
+    private String reportUrl;
     private long totalLineCount;
     private long coveredLineCount;
     private double lineCoveragePercentage;
@@ -43,6 +44,10 @@ public class FullCoverageReport {
     public void setReportPath(String reportPath) {
         this.reportPath = reportPath;
     }
+
+    public String getReportUrl(){ return reportUrl;}
+
+    public void setReportUrl(String reportUrl) { this.reportUrl = reportUrl; }
 
     public long getTotalLineCount() {
         return totalLineCount;

@@ -3,6 +3,7 @@ package com.mofari.coveragecollector.service;
 import com.mofari.coveragecollector.config.CoverageConfig;
 import com.mofari.coveragecollector.model.incremental.*;
 import com.mofari.coveragecollector.model.FullCoverageReport;
+import com.mofari.coveragecollector.util.ReportUrlGenerator;
 import org.jacoco.core.analysis.Analyzer;
 import org.jacoco.core.analysis.CoverageBuilder;
 import org.jacoco.core.analysis.IBundleCoverage;
@@ -168,6 +169,7 @@ public class ReportGeneratorService {
         report.setClusterName(clusterName);
         report.setTag(tag);
         report.setReportPath(reportOutputDir.getAbsolutePath());
+        report.setReportUrl(new ReportUrlGenerator().generateReportUrl(reportOutputDir.getAbsolutePath()));
         
         // Calculate coverage metrics from the bundle
         long totalLineCount = bundleCoverage.getLineCounter().getTotalCount();

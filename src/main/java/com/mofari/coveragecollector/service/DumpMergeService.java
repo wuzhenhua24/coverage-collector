@@ -13,10 +13,9 @@ import java.io.*;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Date;
-import java.util.List;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -148,15 +147,40 @@ public class DumpMergeService {
         }
         
         // 按文件名排序，获取最新的文件（文件名包含时间戳）
+//        return dumpFiles.stream()
+//                .filter(s -> s.contains("jacoco_merged_"))
+//                .max(String::compareTo)
+//                .orElseGet(() -> dumpFiles.stream()
+//                                .filter(s -> !s.contains("jacoco_merged_"))
+//                                .max(String::compareTo)
+//                                .orElse(null));
+        // 使用自定义比较器，该比较器提取并比较每个文件名的时间戳
         return dumpFiles.stream()
-                .filter(s -> s.contains("jacoco_merged_"))
-                .max(String::compareTo)
-                .orElseGet(() -> dumpFiles.stream()
-                                .filter(s -> !s.contains("jacoco_merged_"))
-                                .max(String::compareTo)
-                                .orElse(null));
+                .max(Comparator.comparing(this::extractTimestamp))
+                .orElse(null);
     }
-    
+
+    /**
+     * 从文件名中提取时间戳字符串。
+     * @param fileName 文件名
+     * @return 提取到的时间戳字符串，如果未找到则返回空字符串。
+     */
+    private String extractTimestamp(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
+        Pattern TIMESTAMP_PATTERN = Pattern.compile("_(\\d{8}_\\d{6}_\\d{3})");
+
+        Matcher matcher = TIMESTAMP_PATTERN.matcher(fileName);
+        if (matcher.find()) {
+            // group(1) 返回第一个捕获组的内容，即括号内的部分
+            return matcher.group(1);
+        }
+        // 如果文件名中没有匹配到时间戳，返回空字符串
+        // 这将使没有时间戳的文件在排序中被视为“最早的”
+        return "";
+    }
+
     /**
      * 清理旧的dump文件，只保留最新的几个文件
      * @param appName 应用名称
