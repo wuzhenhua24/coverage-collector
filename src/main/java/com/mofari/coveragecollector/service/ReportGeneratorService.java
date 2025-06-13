@@ -139,7 +139,7 @@ public class ReportGeneratorService {
         List<String> classDirs = getClassDirectories(appName,tag);
         validateDirectories(sourceDirs, classDirs);
 
-        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS").format(new Date());
         Path reportDirName = Paths.get("report_" + timestamp);
         Path reportOutputDirPath;
         if (StringUtils.hasText(clusterName)) {
@@ -310,7 +310,7 @@ public class ReportGeneratorService {
             logger.info("No changed Java files found between {} and {}. Returning an empty incremental report.", baseRef, newRefAsTag);
             report.setOverallStats(new OverallCoverageStats()); // Empty stats
             // Still set a report path for consistency, even if empty
-            String timestampForPath = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+            String timestampForPath = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS").format(new Date());
             Path reportDirName = Paths.get("incremental_" + timestampForPath);
             Path reportOutputDirPath;
             if (StringUtils.hasText(clusterName)) {

@@ -87,7 +87,7 @@ public class DumpMergeService {
         }
         
         // 生成合并后的文件名
-        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS").format(new Date());
         String mergedFileName = String.format("jacoco_merged_%s.exec", timestamp);
         File mergedFile = new File(tagDir, mergedFileName);
         
