@@ -155,13 +155,13 @@ POST http://localhost:8080/api/coverage/collect-and-report
   ?appName=user-service
   &clusterName=prod-cluster    # 必需: 指定集群名，触发Nacos流程
   &tag=v1.3.0
-  &mergeAllDumps=true          # 通常为true，合并来自各节点的数据
+  &mergeAllDumps=false          # 通常为false
 ```
 **参数:**
 - `appName`: 应用名称（必需）。
 - `clusterName`: 集群/环境名称（必需）。用于Nacos服务发现，并在`appName/clusterName/tag`下存储dump和报告。
 - `tag`: 版本标签（必需）。
-- `mergeAllDumps`: (可选, 默认`true`) 是否合并从各节点收集到的dump文件来生成最终报告。
+- `mergeAllDumps`: (可选, 默认`false`) 是否合并从各节点收集到的dump文件来生成最终报告。多节点时每次合并来自各节点的数据，但是历史数据true时才合并
 
 **响应示例 (成功):**
 ```json

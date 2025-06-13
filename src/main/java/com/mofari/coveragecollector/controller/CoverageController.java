@@ -218,7 +218,7 @@ public class CoverageController {
      * @param appName       Application name (required).
      * @param clusterName   Cluster/environment name for Nacos-based multi-node operation (required).
      * @param tag           Version tag (required).
-     * @param mergeAllDumps Whether to merge dumps for the report (typically true).
+     * @param mergeAllDumps Whether to merge dumps for the report (typically false).
      * @return Response entity.
      */
     @PostMapping("/collect-and-report")
@@ -226,7 +226,7 @@ public class CoverageController {
             @RequestParam String appName,
             @RequestParam String clusterName,
             @RequestParam String tag,
-            @RequestParam(value = "mergeAllDumps", defaultValue = "true") boolean mergeAllDumps) {
+            @RequestParam(value = "mergeAllDumps", defaultValue = "false") boolean mergeAllDumps) {
         
         Map<String, Object> response = new HashMap<>();
         String operationSummary = String.format("Nacos-driven collection for app '%s', cluster '%s', tag '%s'", appName, clusterName, tag);
