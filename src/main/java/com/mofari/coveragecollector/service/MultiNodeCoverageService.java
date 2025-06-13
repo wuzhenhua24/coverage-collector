@@ -29,7 +29,7 @@ public class MultiNodeCoverageService {
     /**
      * 从所有节点收集覆盖率数据
      */
-    public MultiNodeCollectionResult collectFromAllNodes(String appName, String clusterName, String tag) {
+    public MultiNodeCollectionResult collectFromAllNodes(String appName, String clusterName, String tag) throws Exception {
         logger.info("开始从所有节点收集覆盖率数据，应用: {}, 集群: {}, 标签: {}", appName, clusterName, tag);
         
         // 从Nacos获取节点信息
@@ -71,6 +71,13 @@ public class MultiNodeCoverageService {
                 logger.error(errorMsg, e);
                 failedNodes.add(instance.getNodeId());
             }
+        }
+
+        //如果有多个节点成功，需要合并各个节点最新的文件，不然后续获得最新的dump文件就只有一个节点
+        if (successfulDumps.size() > 1) {
+            logger.info("Merging all node dump files");
+            String mergedPath = MultiNodeCollectionResult.getMergedAllNodeLatestDumpFilePath(successfulDumps);
+            result.setMergedAllNodeDumpFilePath(mergedPath);
         }
         
         result.setSuccessfulDumps(successfulDumps);
@@ -195,6 +202,7 @@ public class MultiNodeCoverageService {
         private int successCount;
         private int failedCount;
         private List<String> successfulDumps;
+        private String mergedAllNodeDumpFilePath;
         private List<String> failedNodes;
         
         // Getters and Setters
@@ -212,9 +220,70 @@ public class MultiNodeCoverageService {
         public void setFailedCount(int failedCount) { this.failedCount = failedCount; }
         public List<String> getSuccessfulDumps() { return successfulDumps; }
         public void setSuccessfulDumps(List<String> successfulDumps) { this.successfulDumps = successfulDumps; }
+        public String getMergedAllNodeDumpFilePath() { return mergedAllNodeDumpFilePath;}
+        public void setMergedAllNodeDumpFilePath(String mergedAllNodeDumpFilePath) {
+            this.mergedAllNodeDumpFilePath = mergedAllNodeDumpFilePath;}
         public List<String> getFailedNodes() { return failedNodes; }
         public void setFailedNodes(List<String> failedNodes) { this.failedNodes = failedNodes; }
+
+        public static  String getMergedAllNodeLatestDumpFilePath(List<String> successfulDumps) throws Exception {
+
+            // 合并所有dump文件
+            ExecutionDataStore mergedExecutionDataStore = new ExecutionDataStore();
+            SessionInfoStore mergedSessionInfoStore = new SessionInfoStore();
+            StringBuilder stringBuilder = new StringBuilder();
+            for (String dumpPath : successfulDumps) {
+                stringBuilder.append(getIpFromDumpPath(dumpPath)).append("_");
+                try (FileInputStream fis = new FileInputStream(dumpPath)) {
+                    org.jacoco.core.data.ExecutionDataReader reader =
+                            new org.jacoco.core.data.ExecutionDataReader(fis);
+
+                    reader.setSessionInfoVisitor(mergedSessionInfoStore);
+                    reader.setExecutionDataVisitor(mergedExecutionDataStore);
+                    reader.read();
+
+                } catch (Exception e) {
+                    throw new Exception("读取dump文件失败: " + dumpPath, e);
+                }
+            }
+
+            // 生成合并后的文件名
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS").format(new Date());
+            String mergedFileName = String.format("jacoco_merged_%s.exec_" + stringBuilder + "%s.exec", timestamp);
+            File mergedFile = new File(new File(successfulDumps.get(0)).getParent(), mergedFileName);
+
+            // 保存合并后的数据
+            try (FileOutputStream fos = new FileOutputStream(mergedFile)) {
+                org.jacoco.core.data.ExecutionDataWriter writer =
+                        new org.jacoco.core.data.ExecutionDataWriter(fos);
+
+                // 写入合并后的session信息和执行数据
+                mergedSessionInfoStore.accept(writer);
+                mergedExecutionDataStore.accept(writer);
+
+                logger.info("合并后的dump文件已保存: {}", mergedFile.getAbsolutePath());
+
+            } catch (Exception e) {
+                logger.error("保存合并后的dump文件失败", e);
+                throw new Exception("保存合并后的dump文件失败: " + e.getMessage(), e);
+            }
+
+            return mergedFile.getAbsolutePath();
+        }
+
+        private static String getIpFromDumpPath(String dumpPath) {
+            String fileName = new File(dumpPath).getName();
+            String[] parts = fileName.split("_");
+            if (parts.length > 4) {
+                String[] ipParts = Arrays.copyOfRange(parts, 1,5);
+                return String.join("_", ipParts);
+            }else {
+                return null;
+            }
+        }
     }
+
+
     
     /**
      * 多节点重置结果类
@@ -242,5 +311,4 @@ public class MultiNodeCoverageService {
         public void setFailedNodes(List<String> failedNodes) { this.failedNodes = failedNodes; }
     }
     
-    // 方法将在下一步添加
 }
