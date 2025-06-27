@@ -22,6 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -41,6 +42,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -170,12 +172,12 @@ public class ReportGeneratorService {
         report.setTag(tag);
         report.setReportPath(reportOutputDir.getAbsolutePath());
         report.setReportUrl(new ReportUrlGenerator().generateReportUrl(reportOutputDir.getAbsolutePath()));
-        
+
         // Calculate coverage metrics from the bundle
         long totalLineCount = bundleCoverage.getLineCounter().getTotalCount();
         long coveredLineCount = bundleCoverage.getLineCounter().getCoveredCount();
-        double lineCoveragePercentage = totalLineCount > 0 ? 
-            (double) coveredLineCount / totalLineCount * 100 : 0.0;
+        double lineCoveragePercentage = totalLineCount > 0 ?
+                (double) coveredLineCount / totalLineCount * 100 : 0.0;
 
         report.setTotalLineCount(totalLineCount);
         report.setCoveredLineCount(coveredLineCount);
@@ -238,8 +240,8 @@ public class ReportGeneratorService {
     }
 
     private void generateHtmlReport(IBundleCoverage bundleCoverage, ISourceFileLocator sourceLocator,
-                                   File reportDir, SessionInfoStore sessionInfoStore,
-                                   ExecutionDataStore executionDataStore) throws IOException {
+                                    File reportDir, SessionInfoStore sessionInfoStore,
+                                    ExecutionDataStore executionDataStore) throws IOException {
         File htmlReportDir = new File(reportDir, "html");
         htmlReportDir.mkdirs();
         HTMLFormatter htmlFormatter = new HTMLFormatter();
@@ -264,17 +266,17 @@ public class ReportGeneratorService {
     }
 
     public IncrementalCoverageReport generateIncrementalReport(
-            String appName, 
+            String appName,
             String clusterName,
             String tag,
-            String baseRef, 
-            String newRefAsTag,
-            String specificDumpFilePath, 
+            String baseRef,
+            String newRef, // tag-- tags/xxxx
+            String specificDumpFilePath,
             boolean mergeAllDumps)
             throws IOException, InterruptedException, ParserConfigurationException, SAXException {
 
         logger.info("Generating incremental JaCoCo report for app: {}, cluster: {}, tag: {}, baseRef: {}, newRef/Tag: {}, mergeDumps: {}",
-                    appName, clusterName, tag, baseRef, newRefAsTag, mergeAllDumps);
+                appName, clusterName, tag, baseRef, newRef, mergeAllDumps);
 
         CoverageConfig.ApplicationConfig appConfig = coverageConfig.getApplicationConfig(appName);
         if (appConfig == null) {
@@ -286,39 +288,65 @@ public class ReportGeneratorService {
         if (!StringUtils.hasText(projectPath)) {
             throw new IllegalArgumentException("coverage.base-project-path is not configured. It's required for Git diff operations.");
         }
-        Path gitRepoPath = Paths.get(projectPath, appName);
+        Path gitRepoPath = Paths.get(projectPath, appName + "-" + tag);
         if (!Files.isDirectory(gitRepoPath) || !Files.exists(gitRepoPath.resolve(".git"))) {
-             throw new FileNotFoundException("Git repository not found for app '" + appName + "' at expected path: " + gitRepoPath + 
-                                            ". Ensure coverage.base-project-path is set correctly and contains the '<appName>' git project.");
+            throw new FileNotFoundException("Git repository not found for app '" + appName + "' at expected path: " + gitRepoPath +
+                    ". Ensure coverage.base-project-path is set correctly and contains the '<appName>' git project.");
         }
 
 
-        logger.info("Getting changed lines for app: {}, base: {}, new: {}", appName, baseRef, newRefAsTag);
+        logger.info("Getting changed lines for app: {}, base: {}, new: {}", appName, baseRef, newRef);
         // Use newRefAsTag for the git diff operation
-        Map<String, Set<Integer>> changedLinesMap = gitDiffService.getChangedLines(gitRepoPath.toString(), baseRef, newRefAsTag);
+        Map<String, Set<Integer>> changedLinesMap = gitDiffService.getChangedLines(gitRepoPath.toString(), baseRef, newRef);
+
+        // *** START: NEW CODE TO NORMALIZE FILE PATHS ***
+        List<String> sourceDirs = getSourceDirectories(appName, tag);
+        logger.info("Normalizing Git diff paths to match JaCoCo's package-based paths...");
+        Map<String, Set<Integer>> jacocoFormattedChangedLines = new HashMap<>();
+
+        for (Map.Entry<String, Set<Integer>> entry : changedLinesMap.entrySet()) {
+            String gitRelativePath = entry.getKey().replace("\\", "/");
+            Path absoluteGitFilePath = gitRepoPath.resolve(gitRelativePath).normalize();
+            boolean foundMatch = false;
+
+            for (String sourceDirStr : sourceDirs) {
+                Path sourceDirPath = Paths.get(sourceDirStr).normalize();
+                if (absoluteGitFilePath.startsWith(sourceDirPath)) {
+                    String jacocoPath = sourceDirPath.relativize(absoluteGitFilePath).toString().replace("\\", "/");
+                    jacocoFormattedChangedLines.put(jacocoPath, entry.getValue());
+                    logger.debug("Transformed path: '{}' -> '{}'", gitRelativePath, jacocoPath);
+                    foundMatch = true;
+                    break; // Found the correct source root for this file, move to the next file
+                }
+            }
+            if (!foundMatch) {
+                logger.warn("Could not find a matching source directory for changed file: {}. It will not be included in the incremental report.", gitRelativePath);
+            }
+        }
+        // *** END: NEW CODE TO NORMALIZE FILE PATHS ***
 
         IncrementalCoverageReport report = new IncrementalCoverageReport();
         report.setAppName(appName);
         report.setBaseRef(baseRef);
-        report.setNewRef(newRefAsTag); // newRef in report is newRefAsTag
-        report.setTag(newRefAsTag);    // tag in report is also newRefAsTag
+        report.setNewRef(newRef);
+        report.setTag(tag);
         report.setReportTimestamp(TIMESTAMP_FORMATTER.format(Instant.now()));
         if (StringUtils.hasText(clusterName)){
             report.setClusterName(clusterName);
         }
 
 
-        if (changedLinesMap.isEmpty()) {
-            logger.info("No changed Java files found between {} and {}. Returning an empty incremental report.", baseRef, newRefAsTag);
+        if (jacocoFormattedChangedLines.isEmpty()) { // Use the new, normalized map for the check
+            logger.info("No changed Java files found or matched between {} and {}. Returning an empty incremental report.", baseRef, newRef);
             report.setOverallStats(new OverallCoverageStats()); // Empty stats
             // Still set a report path for consistency, even if empty
             String timestampForPath = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS").format(new Date());
             Path reportDirName = Paths.get("incremental_" + timestampForPath);
             Path reportOutputDirPath;
             if (StringUtils.hasText(clusterName)) {
-                reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, clusterName, newRefAsTag, "incremental").resolve(reportDirName);
+                reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, clusterName, tag, "incremental").resolve(reportDirName);
             } else {
-                reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, newRefAsTag, "incremental").resolve(reportDirName);
+                reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, tag, "incremental").resolve(reportDirName);
             }
             Files.createDirectories(reportOutputDirPath);
             File jsonReportFile = reportOutputDirPath.resolve("incremental_coverage.json").toFile();
@@ -333,14 +361,13 @@ public class ReportGeneratorService {
             logger.info("Empty incremental report (no changes) saved to: {}", jsonReportFile.getAbsolutePath());
             return report;
         }
-        
-        // Use newRefAsTag as the 'tag' for locating dump files
-        File actualDumpFile = determineDumpFileToUse(appName, clusterName, newRefAsTag, specificDumpFilePath, mergeAllDumps);
+
+        // Use tag as the 'tag' for locating dump files
+        File actualDumpFile = determineDumpFileToUse(appName, clusterName, tag, specificDumpFilePath, mergeAllDumps);
 
         SessionInfoStore sessionInfoStore = new SessionInfoStore(); // Needed for XML report generation context
         ExecutionDataStore executionDataStore = loadExecutionData(actualDumpFile, sessionInfoStore);
-        
-        List<String> sourceDirs = getSourceDirectories(appName,tag);
+
         List<String> classDirs = getClassDirectories(appName,tag);
         validateDirectories(sourceDirs, classDirs); // Ensure dirs exist before analysis
 
@@ -352,10 +379,10 @@ public class ReportGeneratorService {
         File tempXmlFile = new File(tempReportDir.toFile(), "jacoco_temp.xml");
 
         generateXmlReport(bundleCoverage, sourceLocator, tempReportDir.toFile(), sessionInfoStore, executionDataStore, tempXmlFile.getName());
-        
+
         // Parse the temporary XML and filter based on changed lines
-        // Pass newRefAsTag for both tag and newRef conceptual roles in parseJaCoCoXmlAndFilter
-        IncrementalCoverageReport populatedReport = parseJaCoCoXmlAndFilter(tempXmlFile, changedLinesMap, appName, baseRef, newRefAsTag);
+        // Pass the new, normalized map to the parsing method
+        IncrementalCoverageReport populatedReport = parseJaCoCoXmlAndFilter(tempXmlFile, jacocoFormattedChangedLines, appName, baseRef, tag);
         // Preserve fields already set on 'report'
         populatedReport.setAppName(report.getAppName());
         populatedReport.setBaseRef(report.getBaseRef());
@@ -371,9 +398,9 @@ public class ReportGeneratorService {
         Path reportOutputDirPath;
         // Use newRefAsTag for the directory structure where 'tag' was used
         if (StringUtils.hasText(clusterName)) {
-            reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, clusterName, newRefAsTag, "incremental").resolve(reportDirName);
+            reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, clusterName, tag, "incremental").resolve(reportDirName);
         } else {
-            reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, newRefAsTag, "incremental").resolve(reportDirName);
+            reportOutputDirPath = Paths.get(coverageConfig.getReportOutputDirectory(), appName, tag, "incremental").resolve(reportDirName);
         }
         Files.createDirectories(reportOutputDirPath);
         File jsonReportFile = reportOutputDirPath.resolve("incremental_coverage.json").toFile();
@@ -386,9 +413,9 @@ public class ReportGeneratorService {
              BufferedWriter writer = new BufferedWriter(osw)) {
             writer.write(jsonReport);
         }
-        
+
         logger.info("Incremental JaCoCo report (JSON) generated at: {}", jsonReportFile.getAbsolutePath());
-        
+
         // Cleanup temporary XML report directory
         try {
             Files.deleteIfExists(tempXmlFile.toPath());
@@ -397,37 +424,42 @@ public class ReportGeneratorService {
         } catch (IOException e) {
             logger.warn("Failed to cleanup temporary XML report directory: {}", tempReportDir, e);
         }
-        
+
         return populatedReport;
     }
 
     private IncrementalCoverageReport parseJaCoCoXmlAndFilter(
-            File jacocoXmlFile, 
-            Map<String, Set<Integer>> changedLinesMap,
-            String appName, 
+            File jacocoXmlFile,
+            Map<String, Set<Integer>> changedLinesMap, // This map now contains JaCoCo-style paths
+            String appName,
             String baseRef,
             String newRefAsTag) // Consolidated parameter
             throws ParserConfigurationException, IOException, SAXException {
-        
+
         IncrementalCoverageReport report = new IncrementalCoverageReport();
         report.setAppName(appName);
         report.setBaseRef(baseRef);
         report.setNewRef(newRefAsTag); // newRef in report is newRefAsTag
         report.setTag(newRefAsTag);    // tag in report is also newRefAsTag
-        // reportTimestamp and reportPath will be set by the caller
-        
-        // ... (rest of the parsing logic remains similar, but uses newRefAsTag for context if needed)
-        // Ensure that any internal use of a "tag" or "newRef" concept within this method
-        // correctly refers to newRefAsTag where appropriate.
-        // The primary use is to populate the report object, which is done above.
-        // The actual parsing logic focuses on matching file paths and line numbers.
 
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+
+        //设置安全特性 (关键步骤)
+        // 这是防止 XXE 的最核心和标准的设置
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
         // Mitigate XXE
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        // 为了更彻底地禁用 XXE，还可以设置以下特性
+        // 禁止解析外部通用实体
         factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        // 禁止解析外部参数实体
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        // 禁用外部 DTDs. 这是比 disallow-doctype-decl 更温和的替代方案
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+
+        // 确保禁用 XInclude 处理
         factory.setXIncludeAware(false);
+        // 禁止实体引用扩展，这可以防止 "Billion Laughs" 攻击
         factory.setExpandEntityReferences(false);
 
         DocumentBuilder builder = factory.newDocumentBuilder();
@@ -449,6 +481,7 @@ public class ReportGeneratorService {
                 // Construct full path relative to package
                 String fullFilePath = packageName.isEmpty() ? sourceFileName : packageName + "/" + sourceFileName;
 
+                // This check will now work correctly!
                 if (changedLinesMap.containsKey(fullFilePath)) {
                     Set<Integer> changedLinesInFile = changedLinesMap.get(fullFilePath);
                     FileCoverage fileCoverage = new FileCoverage(fullFilePath);
@@ -574,22 +607,22 @@ public class ReportGeneratorService {
 
     // Refactored public overload for incremental report (without clusterName)
     public IncrementalCoverageReport generateIncrementalReport(
-            String appName, 
-            String baseRef, 
+            String appName,
+            String baseRef,
             String newRefAsTag, // Consolidated parameter
-            String specificDumpFilePath, 
+            String specificDumpFilePath,
             boolean mergeAllDumps)
             throws IOException, InterruptedException, ParserConfigurationException, SAXException {
         // Calls the main refactored method with clusterName as null
         return generateIncrementalReport(appName, null, newRefAsTag,baseRef, newRefAsTag, specificDumpFilePath, mergeAllDumps);
     }
-    
+
     // --- Methods for Full Report (HTML/XML) and Incremental Temp XML ---
     // This is the 6-argument version, used by incremental flow for specific temp file.
     private void generateXmlReport(IBundleCoverage bundleCoverage, ISourceFileLocator sourceLocator,
-                               File reportDir, SessionInfoStore sessionInfoStore,
-                               ExecutionDataStore executionDataStore, String outputFileName) throws IOException {
-        File xmlFile = new File(reportDir, outputFileName); 
+                                   File reportDir, SessionInfoStore sessionInfoStore,
+                                   ExecutionDataStore executionDataStore, String outputFileName) throws IOException {
+        File xmlFile = new File(reportDir, outputFileName);
         XMLFormatter xmlFormatter = new XMLFormatter();
         FileMultiReportOutput multiReportOutput = null;
         IReportVisitor visitor = null;
@@ -614,8 +647,8 @@ public class ReportGeneratorService {
     // This is the 5-argument overload, used by the main full report flow (generateReport)
     // It calls the 6-argument version with a default filename "jacoco.xml"
     private void generateXmlReport(IBundleCoverage bundleCoverage, ISourceFileLocator sourceLocator,
-                                  File reportDir, SessionInfoStore sessionInfoStore,
-                                  ExecutionDataStore executionDataStore) throws IOException {
+                                   File reportDir, SessionInfoStore sessionInfoStore,
+                                   ExecutionDataStore executionDataStore) throws IOException {
         generateXmlReport(bundleCoverage, sourceLocator, reportDir, sessionInfoStore, executionDataStore, "jacoco.xml");
     }
 
@@ -631,4 +664,4 @@ public class ReportGeneratorService {
         // If you need to revive this, you'd need to define how 'appName' and 'tag' are derived.
         // Example: return generateReport("default", "latest", dumpFilePath, false, null);
     }
-} 
+}
