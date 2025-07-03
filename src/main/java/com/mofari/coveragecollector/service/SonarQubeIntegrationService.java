@@ -11,11 +11,11 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -25,12 +25,17 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
 public class SonarQubeIntegrationService {
 
     private static final Logger logger = LoggerFactory.getLogger(SonarQubeIntegrationService.class);
+    private static final Pattern TASK_URL_PATTERN = Pattern.compile(".*task\\?id=([\\w-]+).*");
+    private static final long TASK_POLL_INTERVAL_MS = 10000; // 10 seconds
+    private static final long TASK_POLL_TIMEOUT_MS = 300000; // 5 minutes
 
     @Autowired
     private CoverageConfig coverageConfig;
@@ -65,10 +70,10 @@ public class SonarQubeIntegrationService {
                                                         Path jacocoReportPath, Map<String, String> additionalSonarParams)
             throws IOException, InterruptedException {
 
-        // Step 1: Run the synchronous SonarScanner process
+        // Step 1: Run the synchronous SonarScanner process and wait for server-side completion
         runSonarScanner(projectKey, projectBaseDir, sourceDirs, classDirs, jacocoReportPath, additionalSonarParams);
 
-        // Step 2: After the scanner is done, actively pull the coverage metric from SonarQube's API
+        // Step 2: After the task is complete, actively pull the coverage metric from SonarQube's API
         Double coverage = fetchCoverageMetric(projectKey);
 
         // Step 3: Construct the final URL and result object
@@ -80,7 +85,7 @@ public class SonarQubeIntegrationService {
 
 
     /**
-     * Executes the SonarScanner command process. This is a blocking operation.
+     * Executes the SonarScanner command process and waits for the background task to complete.
      */
     private void runSonarScanner(String projectKey, Path projectBaseDir, List<String> sourceDirs, List<String> classDirs,
                                  Path jacocoReportPath, Map<String, String> additionalSonarParams)
@@ -93,11 +98,6 @@ public class SonarQubeIntegrationService {
 
         List<String> command = new ArrayList<>();
         command.add(sonarConfig.getScannerPath());
-
-        // Add a parameter to make the scanner wait for the server-side analysis to complete.
-        // This makes the process truly synchronous.
-        // 达不到门禁会失败
-//        command.add("-Dsonar.qualitygate.wait=true");
 
         command.add("-Dsonar.projectKey=" + projectKey);
         command.add("-Dsonar.projectName=" + projectKey);
@@ -121,18 +121,24 @@ public class SonarQubeIntegrationService {
             }
         }
 
-        logger.info("Executing SonarScanner command and waiting for completion:\n{}", String.join(" \\\n  ", command));
+        logger.info("Executing SonarScanner command:\n{}", String.join(" \\\n  ", command));
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.directory(projectBaseDir.toFile());
         processBuilder.redirectErrorStream(true);
 
         Process process = processBuilder.start();
+        String taskId = null;
 
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 logger.info("[sonar-scanner] " + line);
+                Matcher matcher = TASK_URL_PATTERN.matcher(line);
+                if (matcher.matches()) {
+                    taskId = matcher.group(1);
+                    logger.info("SonarQube analysis task ID found: {}", taskId);
+                }
             }
         }
 
@@ -141,11 +147,84 @@ public class SonarQubeIntegrationService {
             logger.error("SonarScanner execution failed with exit code: {}", exitCode);
             throw new IOException("SonarScanner execution failed. Check logs for details.");
         }
-        logger.info("SonarScanner analysis completed successfully on server.");
+
+        if (taskId == null) {
+            logger.warn("Could not find SonarQube task ID in scanner output. Skipping wait for completion. Metrics might be stale.");
+            return;
+        }
+
+        // NEW: Wait for the background task on the server to complete.
+        waitForTaskCompletion(taskId);
+
+        logger.info("SonarQube server-side analysis report completed successfully.");
     }
 
     /**
-     * NEW: Fetches the coverage metric for a component from the SonarQube Web API.
+     * NEW: Polls the SonarQube API until the background task is no longer in progress.
+     */
+    private void waitForTaskCompletion(String taskId) throws IOException, InterruptedException {
+        long startTime = System.currentTimeMillis();
+        while (System.currentTimeMillis() - startTime < TASK_POLL_TIMEOUT_MS) {
+            TaskResponse taskResponse = getTaskStatus(taskId);
+            if (taskResponse != null && taskResponse.getTask() != null) {
+                String status = taskResponse.getTask().getStatus();
+                logger.info("Polling SonarQube task '{}'. Current status: {}", taskId, status);
+                switch (status) {
+                    case "SUCCESS":
+                        return; // Task completed successfully
+                    case "FAILED":
+                    case "CANCELED":
+                        throw new IOException("SonarQube analysis task " + taskId + " failed with status: " + status);
+                    case "PENDING":
+                    case "IN_PROGRESS":
+                        // Continue polling
+                        Thread.sleep(TASK_POLL_INTERVAL_MS);
+                        break;
+                    default:
+                        throw new IOException("Unknown SonarQube task status: " + status);
+                }
+            } else {
+                // Wait and retry if the task is not found immediately
+                logger.warn("SonarQube task '{}' not found yet, will retry...", taskId);
+                Thread.sleep(TASK_POLL_INTERVAL_MS);
+            }
+        }
+        throw new IOException("Timed out waiting for SonarQube task " + taskId + " to complete.");
+    }
+
+    /**
+     * NEW: Fetches the status of a single background task.
+     */
+    private TaskResponse getTaskStatus(String taskId) {
+        CoverageConfig.SonarConfig sonarConfig = coverageConfig.getSonar();
+        String apiUrl = sonarConfig.getHostUrl() + "/api/ce/task";
+        String token = sonarConfig.getLoginToken();
+
+        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(apiUrl)
+                .queryParam("id", taskId);
+
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            String authHeader = "Bearer " + token;
+            headers.set("Authorization", authHeader);
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            ResponseEntity<String> responseEntity = restTemplate.exchange(
+                    builder.toUriString(), HttpMethod.GET, entity, String.class);
+
+            return objectMapper.readValue(responseEntity.getBody(), TaskResponse.class);
+
+        } catch (HttpClientErrorException.NotFound e) {
+            // It's possible to query for the task before it's registered. Treat as a non-fatal poll failure.
+            return null;
+        } catch (Exception e) {
+            logger.error("Failed to get SonarQube task status for task ID: {}", taskId, e);
+            return null;
+        }
+    }
+
+    /**
+     * Fetches the coverage metric for a component from the SonarQube Web API.
      */
     private Double fetchCoverageMetric(String projectKey) {
         CoverageConfig.SonarConfig sonarConfig = coverageConfig.getSonar();
@@ -160,25 +239,16 @@ public class SonarQubeIntegrationService {
 
         try {
             HttpHeaders headers = new HttpHeaders();
-            // FIXED: Use Bearer token authentication, which matches the successful curl command.
             String authHeader = "Bearer " + token;
             headers.set("Authorization", authHeader);
-
-            // --- DIAGNOSTIC LOGGING ADDED ---
             logger.info("Sending request to SonarQube with headers: {}", headers);
-
             HttpEntity<String> entity = new HttpEntity<>(headers);
 
             ResponseEntity<String> responseEntity = restTemplate.exchange(
-                    builder.toUriString(),
-                    HttpMethod.GET,
-                    entity,
-                    String.class
-            );
+                    builder.toUriString(), HttpMethod.GET, entity, String.class);
 
             String responseJson = responseEntity.getBody();
 
-            // Parse the JSON response to extract the coverage value
             SonarMeasuresResponse response = objectMapper.readValue(responseJson, SonarMeasuresResponse.class);
             if (response != null && response.getComponent() != null && response.getComponent().getMeasures() != null) {
                 for (Measure measure : response.getComponent().getMeasures()) {
@@ -221,5 +291,19 @@ public class SonarQubeIntegrationService {
         public void setMetric(String metric) { this.metric = metric; }
         public String getValue() { return value; }
         public void setValue(String value) { this.value = value; }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class TaskResponse {
+        private Task task;
+        public Task getTask() { return task; }
+        public void setTask(Task task) { this.task = task; }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class Task {
+        private String status;
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
     }
 }
