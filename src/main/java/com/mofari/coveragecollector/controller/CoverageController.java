@@ -8,6 +8,8 @@ import com.mofari.coveragecollector.config.CoverageConfig;
 import com.mofari.coveragecollector.model.incremental.IncrementalCoverageReport;
 import com.mofari.coveragecollector.model.incremental.FileCoverage;
 import com.mofari.coveragecollector.model.FullCoverageReport;
+import com.mofari.coveragecollector.service.SonarQubeIntegrationService.SonarAnalysisResult;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -686,5 +688,73 @@ public class CoverageController {
         errorResponse.put("success", false);
         errorResponse.put("message", "Endpoint /collect-multi-node-and-report-incremental is deprecated. Please use /collect-and-report-incremental.");
         return ResponseEntity.status(410).body(errorResponse); // 410 Gone
+    }
+
+    /**
+     * Triggers a full coverage analysis and integrates the result with SonarQube.
+     *
+     * @param projectKey The unique key of the project in SonarQube (e.g., appid).
+     * @param appName The name of the application.
+     * @param clusterName The name of the cluster.
+     * @param tag The git tag or branch name of the code version being analyzed.
+     * @param specificDumpFilePath Optional path to a specific dump file.
+     * @param mergeAllDumps Whether to merge all available dump files.
+     * @return A JSON object containing the SonarQube analysis URL and the coverage percentage.
+     */
+    @PostMapping("/sonar-reports/full")
+    public ResponseEntity<?> generateFullReportWithSonar(
+            @RequestParam String projectKey,
+            @RequestParam String appName,
+            @RequestParam(required = false) String clusterName,
+            @RequestParam String tag,
+            @RequestParam(required = false) String specificDumpFilePath,
+            @RequestParam(defaultValue = "false") boolean mergeAllDumps) {
+        try {
+            SonarAnalysisResult result = reportGeneratorService.generateFullReportWithSonar(
+                    projectKey, appName, clusterName, tag, specificDumpFilePath, mergeAllDumps
+            );
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            Map<String, String> errorResponse = new HashMap<>();
+            errorResponse.put("error", "Failed to generate full SonarQube report.");
+            errorResponse.put("details", e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
+    }
+
+    /**
+     * Triggers an incremental coverage analysis (Pull Request analysis) and integrates with SonarQube.
+     *
+     * @param projectKey The unique key of the project in SonarQube (e.g., appid).
+     * @param appName The name of the application.
+     * @param clusterName The name of the cluster.
+     * @param baseRef The base branch for comparison (e.g., 'main' or 'develop').
+     * @param newRefAsTag The feature branch or tag being analyzed.
+     * @param prKey The key/ID of the pull request.
+     * @param specificDumpFilePath Optional path to a specific dump file.
+     * @param mergeAllDumps Whether to merge all available dump files.
+     * @return A JSON object containing the SonarQube analysis URL and the coverage percentage.
+     */
+    @PostMapping("/sonar-reports/incremental")
+    public ResponseEntity<?> generateIncrementalReportWithSonar(
+            @RequestParam(required = false) String projectKey,
+            @RequestParam String appName,
+            @RequestParam(required = false) String clusterName,
+            @RequestParam String baseRef,
+            @RequestParam String newRefAsTag,
+            @RequestParam String prKey, // Pull Request Key
+            @RequestParam(required = false) String specificDumpFilePath,
+            @RequestParam(defaultValue = "false") boolean mergeAllDumps) {
+        try {
+            SonarAnalysisResult result = reportGeneratorService.generateIncrementalReportWithSonar(
+                    projectKey, appName, clusterName, baseRef, newRefAsTag, prKey, specificDumpFilePath, mergeAllDumps
+            );
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            Map<String, String> errorResponse = new HashMap<>();
+            errorResponse.put("error", "Failed to generate incremental SonarQube report.");
+            errorResponse.put("details", e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
     }
 } 

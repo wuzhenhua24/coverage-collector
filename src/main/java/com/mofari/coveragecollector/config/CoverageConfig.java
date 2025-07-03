@@ -18,55 +18,60 @@ import static com.mofari.coveragecollector.util.SourceClassFinder.findDirectorie
 @Component
 @ConfigurationProperties(prefix = "coverage")
 public class CoverageConfig {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(CoverageConfig.class);
-    
+
     /**
      * JaCoCo agent的地址
      */
     private String agentHost = "localhost";
-    
+
     /**
      * JaCoCo agent的端口
      */
     private int agentPort = 6300;
-    
+
     /**
      * 基础项目路径，所有应用都在这个路径下
      */
     private String baseProjectPath = "~/project";
-    
+
     /**
      * 应用源码路径列表 (支持多模块，可以从打包机获取)
      */
     private List<String> sourceDirectories = new ArrayList<>();
-    
+
     /**
      * 应用class文件路径列表 (支持多模块，可以从打包机获取)
      */
     private List<String> classDirectories = new ArrayList<>();
-    
+
     /**
      * 报告输出目录根路径
      */
     private String reportOutputDirectory = "./coverage-reports";
-    
+
     /**
      * dump文件保存目录根路径
      */
     private String dumpDirectory = "./dump-files";
-    
+
     /**
      * 多应用配置
      */
     private Map<String, ApplicationConfig> applications = new HashMap<>();
-    
+
     /**
      * jacoco端口映射配置
      */
     @Value("#{${coverage.jacoco-ports:{}}}")
     private Map<String, Integer> jacocoPortsMap = new HashMap<>();
-    
+
+    /**
+     * NEW: SonarQube configuration
+     */
+    private SonarConfig sonar = new SonarConfig();
+
     /**
      * 获取应用配置
      */
@@ -77,7 +82,7 @@ public class CoverageConfig {
         }
         return new ApplicationConfig();
     }
-    
+
     /**
      * 获取应用配置，支持appName+tag，根目录为~/project/appname-tag/
      * @param appName 应用名
@@ -94,8 +99,8 @@ public class CoverageConfig {
 
         ApplicationConfig confFromYaml = applications.get(appName);
         if (confFromYaml != null &&
-            confFromYaml.getSourceDirectories() != null && !confFromYaml.getSourceDirectories().isEmpty() &&
-            confFromYaml.getClassDirectories() != null && !confFromYaml.getClassDirectories().isEmpty()) {
+                confFromYaml.getSourceDirectories() != null && !confFromYaml.getSourceDirectories().isEmpty() &&
+                confFromYaml.getClassDirectories() != null && !confFromYaml.getClassDirectories().isEmpty()) {
             // 配置了源码和class路径，拼接根目录
             List<String> srcDirs = new ArrayList<>();
             for (String rel : confFromYaml.getSourceDirectories()) {
@@ -119,19 +124,19 @@ public class CoverageConfig {
         }
         return config;
     }
-    
+
     /**
      * 递归查找指定模式的目录
      */
     private List<String> findDirectoriesNot(File rootDir, String targetPattern) {
         List<String> foundPaths = new ArrayList<>();
         String[] patternParts = targetPattern.split("/");
-        
+
         findDirectoriesRecursive(rootDir, patternParts, 0, foundPaths);
-        
+
         return foundPaths;
     }
-    
+
     /**
      * 递归查找目录的实现
      */
@@ -139,15 +144,15 @@ public class CoverageConfig {
         if (!currentDir.exists() || !currentDir.isDirectory()) {
             return;
         }
-        
+
         if (depth >= patternParts.length) {
             foundPaths.add(currentDir.getAbsolutePath());
             return;
         }
-        
+
         String currentPattern = patternParts[depth];
         File[] children = currentDir.listFiles();
-        
+
         if (children != null) {
             for (File child : children) {
                 if (child.isDirectory() && child.getName().equals(currentPattern)) {
@@ -156,7 +161,7 @@ public class CoverageConfig {
             }
         }
     }
-    
+
     /**
      * 展开路径中的~符号
      */
@@ -166,7 +171,7 @@ public class CoverageConfig {
         }
         return path;
     }
-    
+
     /**
      * 获取应用的jacoco端口，如果没有配置则返回默认端口6300
      */
@@ -186,9 +191,9 @@ public class CoverageConfig {
             return appConfig.getAgentPort(); // Will be the default 6300 if not overridden in appConfig
         }
         // Global default port if no app specific config and not in map
-        return this.agentPort; 
+        return this.agentPort;
     }
-    
+
     /**
      * 单个应用配置类
      */
@@ -199,127 +204,168 @@ public class CoverageConfig {
         private String clusterName;             // Optional: For multi-node identification and Nacos discovery
         private List<String> sourceDirectories = new ArrayList<>();
         private List<String> classDirectories = new ArrayList<>();
-        
+
         // Getters and Setters
         public String getName() {
             return name;
         }
-        
+
         public void setName(String name) {
             this.name = name;
         }
-        
+
         public String getAgentHost() {
             return agentHost;
         }
-        
+
         public void setAgentHost(String agentHost) {
             this.agentHost = agentHost;
         }
-        
+
         public int getAgentPort() {
             return agentPort;
         }
-        
+
         public void setAgentPort(int agentPort) {
             this.agentPort = agentPort;
         }
-        
+
         public String getClusterName() {
             return clusterName;
         }
-        
+
         public void setClusterName(String clusterName) {
             this.clusterName = clusterName;
         }
-        
+
         public List<String> getSourceDirectories() {
             return sourceDirectories;
         }
-        
+
         public void setSourceDirectories(List<String> sourceDirectories) {
             this.sourceDirectories = sourceDirectories;
         }
-        
+
         public List<String> getClassDirectories() {
             return classDirectories;
         }
-        
+
         public void setClassDirectories(List<String> classDirectories) {
             this.classDirectories = classDirectories;
         }
     }
-    
+
+    /**
+     * NEW: SonarQube specific configuration class.
+     */
+    public static class SonarConfig {
+        private String hostUrl;
+        private String loginToken;
+        private String scannerPath;
+
+        public String getHostUrl() {
+            return hostUrl;
+        }
+
+        public void setHostUrl(String hostUrl) {
+            this.hostUrl = hostUrl;
+        }
+
+        public String getLoginToken() {
+            return loginToken;
+        }
+
+        public void setLoginToken(String loginToken) {
+            this.loginToken = loginToken;
+        }
+
+        public String getScannerPath() {
+            return scannerPath;
+        }
+
+        public void setScannerPath(String scannerPath) {
+            this.scannerPath = scannerPath;
+        }
+    }
+
     // Getters and Setters
     public String getAgentHost() {
         return agentHost;
     }
-    
+
     public void setAgentHost(String agentHost) {
         this.agentHost = agentHost;
     }
-    
+
     public int getAgentPort() {
         return agentPort;
     }
-    
+
     public void setAgentPort(int agentPort) {
         this.agentPort = agentPort;
     }
-    
+
     public String getBaseProjectPath() {
         return baseProjectPath;
     }
-    
+
     public void setBaseProjectPath(String baseProjectPath) {
         this.baseProjectPath = baseProjectPath;
     }
-    
+
     public List<String> getSourceDirectories() {
         return sourceDirectories;
     }
-    
+
     public void setSourceDirectories(List<String> sourceDirectories) {
         this.sourceDirectories = sourceDirectories;
     }
-    
+
     public List<String> getClassDirectories() {
         return classDirectories;
     }
-    
+
     public void setClassDirectories(List<String> classDirectories) {
         this.classDirectories = classDirectories;
     }
-    
+
     public String getReportOutputDirectory() {
         return reportOutputDirectory;
     }
-    
+
     public void setReportOutputDirectory(String reportOutputDirectory) {
         this.reportOutputDirectory = reportOutputDirectory;
     }
-    
+
     public String getDumpDirectory() {
         return dumpDirectory;
     }
-    
+
     public void setDumpDirectory(String dumpDirectory) {
         this.dumpDirectory = dumpDirectory;
     }
-    
+
     public Map<String, ApplicationConfig> getApplications() {
         return applications;
     }
-    
+
     public void setApplications(Map<String, ApplicationConfig> applications) {
         this.applications = applications;
     }
-    
+
     public Map<String, Integer> getJacocoPortsMap() {
         return jacocoPortsMap;
     }
-    
+
     public void setJacocoPortsMap(Map<String, Integer> jacocoPortsMap) {
         this.jacocoPortsMap = jacocoPortsMap;
     }
-} 
+
+    public SonarConfig getSonar() {
+        return sonar;
+    }
+
+    public void setSonar(SonarConfig sonar) {
+        this.sonar = sonar;
+    }
+}

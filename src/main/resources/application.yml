@@ -44,6 +44,10 @@ coverage:
       class-directories:
         - /custom/path/special-service/target/classes
         - /custom/path/special-service-api/target/classes
+  sonar:
+    hostUrl: http://your-sonarqube-server:9000  # 替换成您的 SonarQube 服务器地址
+    loginToken: "squ_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" # 替换成您的 SonarQube 用户 Token
+    scannerPath: "/path/to/your/sonar-scanner/bin/sonar-scanner" # 替换成您服务器上 sonar-scanner 的绝对路径
 
 # Nacos服务发现配置
 nacos:
@@ -67,4 +71,4 @@ logging:
     com.mofari.coveragecollector: DEBUG
     org.jacoco: INFO
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n" 
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

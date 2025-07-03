@@ -3,6 +3,7 @@ package com.mofari.coveragecollector.service;
 import com.mofari.coveragecollector.config.CoverageConfig;
 import com.mofari.coveragecollector.model.incremental.*;
 import com.mofari.coveragecollector.model.FullCoverageReport;
+import com.mofari.coveragecollector.service.SonarQubeIntegrationService.SonarAnalysisResult;
 import com.mofari.coveragecollector.util.ReportUrlGenerator;
 import org.jacoco.core.analysis.Analyzer;
 import org.jacoco.core.analysis.CoverageBuilder;
@@ -62,6 +63,9 @@ public class ReportGeneratorService {
 
     @Autowired
     private GitDiffService gitDiffService;
+
+    @Autowired
+    private SonarQubeIntegrationService sonarQubeIntegrationService;
 
     // Helper method to determine which dump file to use
     private File determineDumpFileToUse(String appName, String clusterName, String tag, String specificDumpFilePath, boolean mergeAllDumps) throws IOException {
@@ -664,4 +668,99 @@ public class ReportGeneratorService {
         // If you need to revive this, you'd need to define how 'appName' and 'tag' are derived.
         // Example: return generateReport("default", "latest", dumpFilePath, false, null);
     }
+
+    /**
+     * Generates a full coverage report and then triggers a SonarQube analysis.
+     *
+     * @param projectKey The SonarQube project key.
+     * @param appName The application name.
+     * @param clusterName The cluster name.
+     * @param tag The git tag/branch.
+     * @param specificDumpFilePath Optional specific dump file path.
+     * @param mergeAllDumps Flag to merge dumps.
+     * @return The SonarQube analysis result including coverage data.
+     * @throws Exception on failure.
+     */
+    public SonarAnalysisResult generateFullReportWithSonar(String projectKey, String appName, String clusterName, String tag,
+                                                                                       String specificDumpFilePath, boolean mergeAllDumps) throws Exception {
+        logger.info("Starting full report generation for SonarQube integration for app: {}", appName);
+
+        // 1. Generate the full JaCoCo XML report first
+        FullCoverageReport fullReport = generateReport(appName, clusterName, tag, specificDumpFilePath, mergeAllDumps);
+        Path reportPath = Paths.get(fullReport.getReportPath());
+        File jacocoXmlFile = reportPath.resolve("jacoco.xml").toFile();
+
+        if (!jacocoXmlFile.exists()) {
+            throw new IOException("jacoco.xml was not generated at the expected path: " + jacocoXmlFile.getAbsolutePath());
+        }
+
+        // 2. Prepare parameters for SonarScanner
+        String projectPath = coverageConfig.getBaseProjectPath();
+        Path gitRepoPath = Paths.get(projectPath, appName + "-" + tag);
+        List<String> sourceDirs = getSourceDirectories(appName, tag);
+        List<String> classDirs = getClassDirectories(appName, tag);
+
+        // For a full scan, we might not have specific PR parameters.
+        // We can add branch information if available.
+        // Developer edition or above is required for this property
+//        Map<String, String> sonarParams = new HashMap<>();
+//        sonarParams.put("sonar.branch.name", tag);
+
+        // 3. Run SonarScanner
+        return sonarQubeIntegrationService.runScannerAndGetCoverage(
+                projectKey, gitRepoPath, sourceDirs, classDirs, jacocoXmlFile.toPath(), null
+        );
+    }
+
+    // --- NEW METHOD FOR INCREMENTAL SONARQUBE INTEGRATION ---
+
+    /**
+     * Generates an incremental coverage report and then triggers a SonarQube Pull Request analysis.
+     *
+     * @param projectKey The SonarQube project key.
+     * @param appName The application name.
+     * @param clusterName The cluster name.
+     * @param baseRef The base branch for comparison.
+     * @param newRefAsTag The feature branch being analyzed.
+     * @param prKey The Pull Request key/ID.
+     * @param specificDumpFilePath Optional specific dump file path.
+     * @param mergeAllDumps Flag to merge dumps.
+     * @return The SonarQube analysis result including coverage data.
+     * @throws Exception on failure.
+     */
+    public SonarAnalysisResult generateIncrementalReportWithSonar(String projectKey, String appName, String clusterName, String baseRef,
+                                                     String newRefAsTag, String prKey, String specificDumpFilePath, boolean mergeAllDumps) throws Exception {
+        logger.info("Starting incremental report generation for SonarQube PR analysis for app: {}", appName);
+
+        // 1. Generate the JaCoCo XML report (this happens inside generateIncrementalReport)
+        // We need to slightly modify the flow to get the path to the temp XML file.
+        // For now, let's assume generateIncrementalReport already creates a jacoco.xml.
+        // A better approach would be to refactor generateIncrementalReport to return the XML path.
+        // Let's first generate the full report to get the XML, which is a prerequisite.
+        FullCoverageReport fullReport = generateReport(appName, clusterName, newRefAsTag, specificDumpFilePath, mergeAllDumps);
+        Path reportPath = Paths.get(fullReport.getReportPath());
+        File jacocoXmlFile = reportPath.resolve("jacoco.xml").toFile();
+
+        if (!jacocoXmlFile.exists()) {
+            throw new IOException("jacoco.xml was not generated at the expected path: " + jacocoXmlFile.getAbsolutePath());
+        }
+
+        // 2. Prepare parameters for SonarScanner
+        String projectPath = coverageConfig.getBaseProjectPath();
+        Path gitRepoPath = Paths.get(projectPath, appName + "-" + newRefAsTag);
+        List<String> sourceDirs = getSourceDirectories(appName, newRefAsTag);
+        List<String> classDirs = getClassDirectories(appName, newRefAsTag);
+
+        // These are the crucial parameters for a Pull Request analysis
+        Map<String, String> sonarParams = new HashMap<>();
+        sonarParams.put("sonar.pullrequest.key", prKey);
+        sonarParams.put("sonar.pullrequest.branch", newRefAsTag);
+        sonarParams.put("sonar.pullrequest.base", baseRef);
+
+        // 3. Run SonarScanner
+        return sonarQubeIntegrationService.runScannerAndGetCoverage(
+                projectKey, gitRepoPath, sourceDirs, classDirs, jacocoXmlFile.toPath(), sonarParams
+        );
+    }
+
 }
